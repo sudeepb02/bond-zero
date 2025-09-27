@@ -9,11 +9,24 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+
+import {BondZeroMaster} from "./BondZeroMaster.sol";
 
 contract BondZeroHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    BondZeroMaster public immutable bondZeroMaster;
+
+    // Mapping from Uniswap pool ID to market ID
+    mapping(PoolId poolId => bytes32 marketId) public poolToMarketId;
+
+    // Events
+    event PoolMarketMappingSet(PoolId indexed poolId, bytes32 indexed marketId);
+
+    constructor(IPoolManager _poolManager, BondZeroMaster _bondZeroMaster) BaseHook(_poolManager) {
+        bondZeroMaster = _bondZeroMaster;
+    }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -35,14 +48,53 @@ contract BondZeroHook is BaseHook {
     }
 
     ////////////////////////////////////////////////////////
+    /////////////////// Pool Management ////////////////////
+    ////////////////////////////////////////////////////////
+
+    function setPoolMarketMapping(PoolKey calldata poolKey, bytes32 marketId) external {
+        PoolId poolId = poolKey.toId();
+
+        // Verify that the market exists in BondZeroMaster
+        BondZeroMaster.BondMarket memory market = bondZeroMaster.getBondMarket(marketId);
+        require(market.yieldBearingToken != address(0), "invalid market");
+
+        poolToMarketId[poolId] = marketId;
+        emit PoolMarketMappingSet(poolId, marketId);
+    }
+
+    function getMarketIdForPool(PoolKey calldata poolKey) external view returns (bytes32) {
+        return poolToMarketId[poolKey.toId()];
+    }
+
+    function getBondMarketForPool(PoolKey calldata poolKey) external view returns (BondZeroMaster.BondMarket memory) {
+        bytes32 marketId = poolToMarketId[poolKey.toId()];
+        require(marketId != bytes32(0), "invalid market");
+        return bondZeroMaster.getBondMarket(marketId);
+    }
+
+    ////////////////////////////////////////////////////////
     /////////////////////// Swap Hooks /////////////////////
     ////////////////////////////////////////////////////////
 
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        PoolId poolId = key.toId();
+        bytes32 marketId = poolToMarketId[poolId];
+
+        // If makret is not set with pool, skip hook logic
+        if (marketId == bytes32(0)) {
+            return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
+        BondZeroMaster.BondMarket memory market = bondZeroMaster.getBondMarket(marketId);
+        require(market.yieldBearingToken != address(0), "invalid market");
+
+        // @todo handle for expired markets, else continue with existing logic
+        if (market.expiry < block.timestamp) {}
+
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 }
