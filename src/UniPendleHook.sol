@@ -69,9 +69,31 @@ contract UniPendleHook is BaseHook {
 
     mapping(PoolId => PendleMarketState) public pendleMarketState;
     mapping(PoolId => PendleMarketPreCompute) public pendleMarketPreCompute;
-    mapping(PoolId => PendleMarketV3) public pendleMarketV3;
 
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    // @note As it is not possible to pass hookData to the `afterInitialize` hook,
+    // use the Hook constructor to configure the Pool and Pendle market parameters
+    // and use a new hook per pool until a better solution is available
+    // Should be fine for the hackathon after discussion with the Uni Team at the booth
+
+    PendleMarketV3 public pendleMarket;
+
+    constructor(IPoolManager _poolManager, InitData memory initData) BaseHook(_poolManager) {
+        require(address(pendleMarket.PT) != address(0), "already initialized");
+
+        IPPrincipalToken PT_ = IPPrincipalToken(initData.ptAddress);
+        pendleMarket.PT = PT_;
+        pendleMarket.SY = IStandardizedYield(PT_.SY());
+        pendleMarket.YT = IPYieldToken(PT_.YT());
+
+        // Observation cardinality not required for oracle
+
+        if (initData.scalarRoot <= 0) revert("MarketScalarRootBelowZero");
+
+        pendleMarket.scalarRoot = initData.scalarRoot;
+        pendleMarket.initialAnchor = initData.initialAnchor;
+        pendleMarket.lnFeeRateRoot = initData.lnFeeRateRoot;
+        pendleMarket.expiry = PT_.expiry();
+    }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -96,32 +118,12 @@ contract UniPendleHook is BaseHook {
     ///////////////// Initialization Hooks /////////////////
     ////////////////////////////////////////////////////////
 
-    function afterInitialize(
-        address sender,
-        PoolKey calldata key,
-        uint160 sqrtPriceX96,
-        int24 tick,
-        bytes calldata data
-    ) external override onlyPoolManager returns (bytes4) {
-        InitData memory decodedData = abi.decode(data, (InitData));
-
-        PendleMarketV3 storage pendleMarket = pendleMarketV3[key.toId()];
-        require(address(pendleMarket.PT) != address(0), "already initialized");
-
-        IPPrincipalToken PT_ = IPPrincipalToken(decodedData.ptAddress);
-        pendleMarket.PT = PT_;
-        pendleMarket.SY = IStandardizedYield(PT_.SY());
-        pendleMarket.YT = IPYieldToken(PT_.YT());
-
-        // Observation cardinality not required for oracle
-
-        if (decodedData.scalarRoot <= 0) revert("MarketScalarRootBelowZero");
-
-        pendleMarket.scalarRoot = decodedData.scalarRoot;
-        pendleMarket.initialAnchor = decodedData.initialAnchor;
-        pendleMarket.lnFeeRateRoot = decodedData.lnFeeRateRoot;
-        pendleMarket.expiry = PT_.expiry();
-
+    function afterInitialize(address sender, PoolKey calldata key, uint160 sqrtPriceX96, int24 tick)
+        external
+        override
+        onlyPoolManager
+        returns (bytes4)
+    {
         return BaseHook.afterInitialize.selector;
     }
 
