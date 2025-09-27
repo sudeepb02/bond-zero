@@ -10,6 +10,10 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
+import {IStandardizedYield} from "@pendle/core-v2/contracts/interfaces/IStandardizedYield.sol";
+import {IPPrincipalToken} from "@pendle/core-v2/contracts/interfaces/IPPrincipalToken.sol";
+import {IPYieldToken} from "@pendle/core-v2/contracts/interfaces/IPYieldToken.sol";
+
 contract UniPendleHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
@@ -35,8 +39,15 @@ contract UniPendleHook is BaseHook {
         int256 feeRate;
     }
 
+    struct PendleTokens {
+        IStandardizedYield SY;
+        IPPrincipalToken PT;
+        IPYieldToken YT;
+    }
+
     mapping(PoolId => PendleMarketState) public pendleMarketState;
     mapping(PoolId => PendleMarketPreCompute) public pendleMarketPreCompute;
+    mapping(PoolId => PendleTokens) public pendleTokens;
 
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
@@ -119,5 +130,24 @@ contract UniPendleHook is BaseHook {
         returns (bytes4, int128)
     {
         return (BaseHook.afterSwap.selector, 0);
+    }
+
+    ////////////////////////////////////////////////////////
+    /////////////////// Helper functions ///////////////////
+    ////////////////////////////////////////////////////////
+
+    function _setPendleTokensForPool(PoolId poolId, address _PT) internal {
+        if (address(pendleTokens[poolId].PT) != address(0)) {
+            // @todo Replace with custom error
+            revert("Pendle tokens already set");
+        }
+
+        IPPrincipalToken PT_ = IPPrincipalToken(_PT);
+        IStandardizedYield SY_ = IStandardizedYield(PT_.SY());
+        IPYieldToken YT_ = IPYieldToken(PT_.YT());
+
+        pendleTokens[poolId].PT = PT_;
+        pendleTokens[poolId].SY = SY_;
+        pendleTokens[poolId].YT = YT_;
     }
 }
