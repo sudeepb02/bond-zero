@@ -12,8 +12,5 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "@pendle/core-v2": "^6.1.4"
-  }
+  "license": "ISC"
 }

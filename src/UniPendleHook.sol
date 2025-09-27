@@ -10,90 +10,10 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
-import {IStandardizedYield} from "@pendle/core-v2/contracts/interfaces/IStandardizedYield.sol";
-import {IPPrincipalToken} from "@pendle/core-v2/contracts/interfaces/IPPrincipalToken.sol";
-import {IPYieldToken} from "@pendle/core-v2/contracts/interfaces/IPYieldToken.sol";
-
 contract UniPendleHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
-    struct PendleMarketState {
-        int256 totalPt;
-        int256 totalSy;
-        int256 totalLp;
-        address treasury;
-        /// immutable variables ///
-        int256 scalarRoot;
-        uint256 expiry;
-        /// fee data ///
-        uint256 lnFeeRateRoot;
-        uint256 reserveFeePercent; // base 100
-        /// last trade data ///
-        uint256 lastLnImpliedRate;
-    }
-
-    struct PendleMarketPreCompute {
-        int256 rateScalar;
-        int256 totalAsset;
-        int256 rateAnchor;
-        int256 feeRate;
-    }
-
-    struct PendleMarketV3 {
-        IStandardizedYield SY;
-        IPPrincipalToken PT;
-        IPYieldToken YT;
-        uint256 expiry;
-        int256 scalarRoot;
-        int256 initialAnchor;
-        uint80 lnFeeRateRoot;
-    }
-
-    // struct PendleMarketStorage {
-    //     int128 totalPt;
-    //     int128 totalSy;
-    //     // 1 SLOT = 256 bits
-    //     uint96 lastLnImpliedRate;
-    //     uint16 observationIndex;
-    //     uint16 observationCardinality;
-    //     uint16 observationCardinalityNext;
-    // }
-    // // 1 SLOT = 144 bits
-
-    struct InitData {
-        address ptAddress;
-        int256 scalarRoot;
-        int256 initialAnchor;
-        uint80 lnFeeRateRoot;
-    }
-
-    mapping(PoolId => PendleMarketState) public pendleMarketState;
-    mapping(PoolId => PendleMarketPreCompute) public pendleMarketPreCompute;
-
-    // @note As it is not possible to pass hookData to the `afterInitialize` hook,
-    // use the Hook constructor to configure the Pool and Pendle market parameters
-    // and use a new hook per pool until a better solution is available
-    // Should be fine for the hackathon after discussion with the Uni Team at the booth
-
-    PendleMarketV3 public pendleMarket;
-
-    constructor(IPoolManager _poolManager, InitData memory initData) BaseHook(_poolManager) {
-        require(address(pendleMarket.PT) != address(0), "already initialized");
-
-        IPPrincipalToken PT_ = IPPrincipalToken(initData.ptAddress);
-        pendleMarket.PT = PT_;
-        pendleMarket.SY = IStandardizedYield(PT_.SY());
-        pendleMarket.YT = IPYieldToken(PT_.YT());
-
-        // Observation cardinality not required for oracle
-
-        if (initData.scalarRoot <= 0) revert("MarketScalarRootBelowZero");
-
-        pendleMarket.scalarRoot = initData.scalarRoot;
-        pendleMarket.initialAnchor = initData.initialAnchor;
-        pendleMarket.lnFeeRateRoot = initData.lnFeeRateRoot;
-        pendleMarket.expiry = PT_.expiry();
-    }
+    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -131,11 +51,13 @@ contract UniPendleHook is BaseHook {
     //////////////////// Liquidity Hooks ///////////////////
     ////////////////////////////////////////////////////////
 
-    function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
-        internal
-        override
-        returns (bytes4)
-    {
+    /// @dev The Math logic and state updates before liquidity is added and LP tokens are minted
+    function _beforeAddLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) internal override returns (bytes4) {
         return BaseHook.beforeAddLiquidity.selector;
     }
 
@@ -188,8 +110,4 @@ contract UniPendleHook is BaseHook {
     {
         return (BaseHook.afterSwap.selector, 0);
     }
-
-    ////////////////////////////////////////////////////////
-    /////////////////// Helper functions ///////////////////
-    ////////////////////////////////////////////////////////
 }
