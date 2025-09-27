@@ -73,7 +73,7 @@ contract BondZeroMaster {
 
         // Calculate principal and yield amounts
         (uint256 principalAmount, uint256 yieldAmount) =
-            _calculateTokenAmounts(_amount, market.initialApr, timeToMaturity);
+            _calculatePtAndYtFromYieldBearing(_amount, market.initialApr, timeToMaturity);
 
         // Mint principal tokens (1:1 with underlying asset value)
         PrincipalToken(market.principalToken).mint(msg.sender, principalAmount);
@@ -84,7 +84,7 @@ contract BondZeroMaster {
         emit TokensDeposited(_marketId, msg.sender, _amount, principalAmount, yieldAmount);
     }
 
-    function _calculateTokenAmounts(uint256 _amount, uint256 _initialApr, uint256 _timeToMaturity)
+    function _calculatePtAndYtFromYieldBearing(uint256 _amount, uint256 _initialApr, uint256 _timeToMaturity)
         internal
         pure
         returns (uint256 principalAmount, uint256 yieldAmount)
