@@ -96,10 +96,10 @@ contract BondZeroMaster {
     {
         // Calculate the present value of the yield bearing token
         // Formula: PV = FV / (1 + r * t / 365 days)
-        // Where r is APR (as percentage), t is time to maturity in seconds
+        // Where r is APR (in basis points), t is time to maturity in seconds
 
         uint256 annualizedTime = _timeToMaturity * 1e18 / 365 days; // Time as fraction of year (18 decimals)
-        uint256 discountRate = _initialApr * annualizedTime / 100 / 1e18; // APR percentage applied for time period
+        uint256 discountRate = _initialApr * annualizedTime / 10000; // APR percentage applied for time period (18 decimals)
 
         // Principal amount is the present value of the deposit
         principalAmount = _amount * 1e18 / (1e18 + discountRate);
