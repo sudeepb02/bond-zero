@@ -7,7 +7,7 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {BondZeroMaster} from "../src/BondZeroMaster.sol";
 import {PrincipalToken} from "../src/PrincipalToken.sol";
 import {YieldToken} from "../src/YieldToken.sol";
-import {MockYieldBearingToken} from "./mocks/MockYieldBearingToken.sol";
+import {MockYieldBearingToken} from "../src/mocks/MockYieldBearingToken.sol";
 
 contract BondZeroMasterTest is Test {
     BondZeroMaster public bondZeroMaster;
