@@ -12,6 +12,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
@@ -108,7 +109,7 @@ contract BondZeroHookTest is Test, Deployers {
         // @todo Get the price of token0 in token1
 
         // Create the pool
-        poolKey = PoolKey(currency0, currency1, 3000, 60, IHooks(hook));
+        poolKey = PoolKey(currency0, currency1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(hook));
         poolId = poolKey.toId();
         poolManager.initialize(poolKey, Constants.SQRT_PRICE_1_1);
 

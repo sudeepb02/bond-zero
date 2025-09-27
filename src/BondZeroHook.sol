@@ -17,6 +17,10 @@ import {BondZeroMaster} from "./BondZeroMaster.sol";
 contract BondZeroHook is BaseHook, Ownable {
     using PoolIdLibrary for PoolKey;
 
+    uint24 public constant MIN_FEE = 500; // 0.05%
+    uint24 public constant MAX_FEE = 3000; // 0.30%
+    uint24 public constant INITIAL_POOL_FEE = 500; // 0.05% initial fee
+
     BondZeroMaster public immutable bondZeroMaster;
 
     // Mapping from Uniswap pool ID to market ID
@@ -32,7 +36,7 @@ contract BondZeroHook is BaseHook, Ownable {
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
-            afterInitialize: false,
+            afterInitialize: true,
             beforeAddLiquidity: false,
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
@@ -74,8 +78,13 @@ contract BondZeroHook is BaseHook, Ownable {
     }
 
     ////////////////////////////////////////////////////////
-    /////////////////////// Swap Hooks /////////////////////
+    ///////////////////////  Hooks /////////////////////////
     ////////////////////////////////////////////////////////
+
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
+        poolManager.updateDynamicLPFee(key, INITIAL_POOL_FEE);
+        return BaseHook.afterInitialize.selector;
+    }
 
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
