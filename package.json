@@ -1,0 +1,19 @@
+{
+  "name": "unipendle",
+  "version": "0.0.1",
+  "description": "Uniswap V4 hooks to implement Pendle Market",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@pendle/core-v2": "^6.1.4"
+  }
+}
