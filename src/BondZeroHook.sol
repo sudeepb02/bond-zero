@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager, SwapParams, ModifyLiquidityParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -13,7 +14,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 import {BondZeroMaster} from "./BondZeroMaster.sol";
 
-contract BondZeroHook is BaseHook {
+contract BondZeroHook is BaseHook, Ownable {
     using PoolIdLibrary for PoolKey;
 
     BondZeroMaster public immutable bondZeroMaster;
@@ -24,7 +25,7 @@ contract BondZeroHook is BaseHook {
     // Events
     event PoolMarketMappingSet(PoolId indexed poolId, bytes32 indexed marketId);
 
-    constructor(IPoolManager _poolManager, BondZeroMaster _bondZeroMaster) BaseHook(_poolManager) {
+    constructor(IPoolManager _poolManager, BondZeroMaster _bondZeroMaster) BaseHook(_poolManager) Ownable(msg.sender) {
         bondZeroMaster = _bondZeroMaster;
     }
 
@@ -51,7 +52,7 @@ contract BondZeroHook is BaseHook {
     /////////////////// Pool Management ////////////////////
     ////////////////////////////////////////////////////////
 
-    function setPoolMarketMapping(PoolKey calldata poolKey, bytes32 marketId) external {
+    function setPoolMarketMapping(PoolKey calldata poolKey, bytes32 marketId) external onlyOwner {
         PoolId poolId = poolKey.toId();
 
         // Verify that the market exists in BondZeroMaster
