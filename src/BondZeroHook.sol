@@ -10,7 +10,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
-contract UniPendleHook is BaseHook {
+contract BondZeroHook is BaseHook {
     using PoolIdLibrary for PoolKey;
 
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
