@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract YieldToken is ERC20 {
     address public issuer;
 
-    constructor() ERC20("YieldToken", "YT") {
+    constructor(string memory _name, string memory _symbol) ERC20(_name, _symbol) {
         issuer = msg.sender;
     }
 
