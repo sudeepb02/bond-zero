@@ -28,12 +28,8 @@ contract BondZeroMaster {
     event MarketCreated(
         bytes32 indexed marketId, address indexed yieldBearingToken, address indexed assetToken, uint256 expiry
     );
-    event TokensDeposited(
-        bytes32 indexed marketId, address indexed user, uint256 ybtAmount, uint256 principalAmount, uint256 yieldAmount
-    );
-    event TokensRedeemed(
-        bytes32 indexed marketId, address indexed user, uint256 ybtAmount, uint256 principalAmount, uint256 yieldAmount
-    );
+    event TokensDeposited(bytes32 indexed marketId, address indexed user, uint256 ybtAmount);
+    event TokensRedeemed(bytes32 indexed marketId, address indexed user, uint256 ybtAmount);
 
     constructor() {}
 
@@ -73,39 +69,10 @@ contract BondZeroMaster {
         // Transfer yield bearing token from user to contract
         IERC20(market.yieldBearingToken).safeTransferFrom(msg.sender, address(this), _amount);
 
-        // Calculate time to maturity in seconds
-        uint256 timeToMaturity = market.expiry - block.timestamp;
+        PrincipalToken(market.principalToken).mint(msg.sender, _amount);
+        YieldToken(market.yieldToken).mint(msg.sender, _amount);
 
-        // Calculate principal and yield amounts
-        (uint256 principalAmount, uint256 yieldAmount) =
-            _calculatePtAndYtFromYieldBearing(_amount, market.initialApr, timeToMaturity);
-
-        // Mint principal tokens (1:1 with underlying asset value)
-        PrincipalToken(market.principalToken).mint(msg.sender, principalAmount);
-
-        // Mint yield tokens (representing future yield)
-        YieldToken(market.yieldToken).mint(msg.sender, yieldAmount);
-
-        emit TokensDeposited(_marketId, msg.sender, _amount, principalAmount, yieldAmount);
-    }
-
-    function _calculatePtAndYtFromYieldBearing(uint256 _amount, uint256 _initialApr, uint256 _timeToMaturity)
-        internal
-        pure
-        returns (uint256 principalAmount, uint256 yieldAmount)
-    {
-        // Calculate the present value of the yield bearing token
-        // Formula: PV = FV / (1 + r * t / 365 days)
-        // Where r is APR (in basis points), t is time to maturity in seconds
-
-        uint256 annualizedTime = _timeToMaturity * 1e18 / 365 days; // Time as fraction of year (18 decimals)
-        uint256 discountRate = _initialApr * annualizedTime / 10000; // APR percentage applied for time period (18 decimals)
-
-        // Principal amount is the present value of the deposit
-        principalAmount = _amount * 1e18 / (1e18 + discountRate);
-
-        // Yield amount represents the expected yield until maturity
-        yieldAmount = _amount - principalAmount;
+        emit TokensDeposited(_marketId, msg.sender, _amount);
     }
 
     function getBondMarket(address _yieldBearingToken, address _assetToken, uint256 _expiry)
@@ -121,32 +88,58 @@ contract BondZeroMaster {
         return bondMarkets[_marketId];
     }
 
-    function calculateRedemptionAmounts(bytes32 _marketId, uint256 _yieldBearingAmount)
-        external
-        view
-        returns (uint256 principalTokensNeeded, uint256 yieldTokensNeeded)
-    {
+    function getPtPriceInYbt(bytes32 _marketId) external view returns (uint256) {
         BondMarket memory market = bondMarkets[_marketId];
         require(market.yieldBearingToken != address(0), "!exist");
 
-        // If market has expired, only principal tokens are needed (1:1 ratio)
         if (block.timestamp >= market.expiry) {
-            return (_yieldBearingAmount, 0);
+            return 1e18; // At or after expiry, PT is worth 1 YBT
         }
 
-        // Calculate time to maturity in seconds
         uint256 timeToMaturity = market.expiry - block.timestamp;
+        return _calculatePtPrice(market.initialApr, timeToMaturity);
+    }
 
-        // Calculate the required PT and YT amounts to redeem the yield bearing tokens
-        (principalTokensNeeded, yieldTokensNeeded) =
-            _calculatePtAndYtFromYieldBearing(_yieldBearingAmount, market.initialApr, timeToMaturity);
+    function getYtPriceInYbt(bytes32 _marketId) external view returns (uint256) {
+        BondMarket memory market = bondMarkets[_marketId];
+        require(market.yieldBearingToken != address(0), "!exist");
+
+        if (block.timestamp >= market.expiry) {
+            return 0; // After expiry, YT is worthless
+        }
+
+        uint256 ptPrice = _calculatePtPrice(market.initialApr, market.expiry - block.timestamp);
+        return 1e18 - ptPrice; // YT price = 1 YBT - PT price
+    }
+
+    function _calculatePtPrice(uint256 aprBps, uint256 timeToMaturity) internal pure returns (uint256) {
+        if (timeToMaturity == 0) return 1e18; // At maturity, PT = 1
+
+        // aprBps is in basis points (e.g., 1000 = 10%)
+        // Convert to 1e18 fixed-point decimal: r = aprBps / 10000
+        // => multiply by 1e18 / 10000 = 1e14
+        uint256 r = aprBps * 1e14; // 1e18-scaled rate
+
+        // Time to maturity in years (1e18-scaled)
+        uint256 t = (timeToMaturity * 1e18) / 365 days;
+
+        // r * t (1e18-scaled)
+        uint256 rt = (r * t) / 1e18;
+
+        // denominator = 1 + r*t
+        uint256 denom = 1e18 + rt;
+
+        // PT price = 1 / (1 + r*t)
+        uint256 ptPrice = (1e18 * 1e18) / denom;
+
+        return ptPrice;
     }
 
     function redeemPtAndYt(bytes32 _marketId, uint256 _yieldBearingAmount) external {
         BondMarket memory market = bondMarkets[_marketId];
         require(market.yieldBearingToken != address(0), "!exist");
 
-        uint256 principalTokensNeeded;
+        uint256 principalTokensNeeded = _yieldBearingAmount;
         uint256 yieldTokensNeeded;
 
         // If market has expired, only principal tokens are needed
@@ -154,26 +147,17 @@ contract BondZeroMaster {
             principalTokensNeeded = _yieldBearingAmount;
             yieldTokensNeeded = 0;
         } else {
-            // Calculate the required PT and YT amounts
-            (principalTokensNeeded, yieldTokensNeeded) = _calculatePtAndYtFromYieldBearing(
-                _yieldBearingAmount, market.initialApr, market.expiry - block.timestamp
-            );
+            yieldTokensNeeded = _yieldBearingAmount;
+            YieldToken(market.yieldToken).burn(msg.sender, yieldTokensNeeded);
         }
 
         // Burn the required principal tokens
-        if (principalTokensNeeded > 0) {
-            PrincipalToken(market.principalToken).burn(msg.sender, principalTokensNeeded);
-        }
-
-        // Burn the required yield tokens (only if market hasn't expired)
-        if (yieldTokensNeeded > 0) {
-            YieldToken(market.yieldToken).burn(msg.sender, yieldTokensNeeded);
-        }
+        PrincipalToken(market.principalToken).burn(msg.sender, principalTokensNeeded);
 
         // Transfer yield bearing tokens to user
         IERC20(market.yieldBearingToken).safeTransfer(msg.sender, _yieldBearingAmount);
 
-        emit TokensRedeemed(_marketId, msg.sender, _yieldBearingAmount, principalTokensNeeded, yieldTokensNeeded);
+        emit TokensRedeemed(_marketId, msg.sender, _yieldBearingAmount);
     }
 
     function _getMarketId(address _yieldBearingToken, address _assetToken, uint256 _expiry)
