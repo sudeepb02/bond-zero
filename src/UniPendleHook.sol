@@ -39,22 +39,44 @@ contract UniPendleHook is BaseHook {
         int256 feeRate;
     }
 
-    struct PendleTokens {
+    struct PendleMarketV3 {
         IStandardizedYield SY;
         IPPrincipalToken PT;
         IPYieldToken YT;
+        uint256 expiry;
+        int256 scalarRoot;
+        int256 initialAnchor;
+        uint80 lnFeeRateRoot;
+    }
+
+    // struct PendleMarketStorage {
+    //     int128 totalPt;
+    //     int128 totalSy;
+    //     // 1 SLOT = 256 bits
+    //     uint96 lastLnImpliedRate;
+    //     uint16 observationIndex;
+    //     uint16 observationCardinality;
+    //     uint16 observationCardinalityNext;
+    // }
+    // // 1 SLOT = 144 bits
+
+    struct InitData {
+        address ptAddress;
+        int256 scalarRoot;
+        int256 initialAnchor;
+        uint80 lnFeeRateRoot;
     }
 
     mapping(PoolId => PendleMarketState) public pendleMarketState;
     mapping(PoolId => PendleMarketPreCompute) public pendleMarketPreCompute;
-    mapping(PoolId => PendleTokens) public pendleTokens;
+    mapping(PoolId => PendleMarketV3) public pendleMarketV3;
 
     constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: false,
-            afterInitialize: false,
+            afterInitialize: true,
             beforeAddLiquidity: true,
             afterAddLiquidity: true,
             beforeRemoveLiquidity: true,
@@ -68,6 +90,39 @@ contract UniPendleHook is BaseHook {
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
+    }
+
+    ////////////////////////////////////////////////////////
+    ///////////////// Initialization Hooks /////////////////
+    ////////////////////////////////////////////////////////
+
+    function afterInitialize(
+        address sender,
+        PoolKey calldata key,
+        uint160 sqrtPriceX96,
+        int24 tick,
+        bytes calldata data
+    ) external override onlyPoolManager returns (bytes4) {
+        InitData memory decodedData = abi.decode(data, (InitData));
+
+        PendleMarketV3 storage pendleMarket = pendleMarketV3[key.toId()];
+        require(address(pendleMarket.PT) != address(0), "already initialized");
+
+        IPPrincipalToken PT_ = IPPrincipalToken(decodedData.ptAddress);
+        pendleMarket.PT = PT_;
+        pendleMarket.SY = IStandardizedYield(PT_.SY());
+        pendleMarket.YT = IPYieldToken(PT_.YT());
+
+        // Observation cardinality not required for oracle
+
+        if (decodedData.scalarRoot <= 0) revert("MarketScalarRootBelowZero");
+
+        pendleMarket.scalarRoot = decodedData.scalarRoot;
+        pendleMarket.initialAnchor = decodedData.initialAnchor;
+        pendleMarket.lnFeeRateRoot = decodedData.lnFeeRateRoot;
+        pendleMarket.expiry = PT_.expiry();
+
+        return BaseHook.afterInitialize.selector;
     }
 
     ////////////////////////////////////////////////////////
@@ -135,19 +190,4 @@ contract UniPendleHook is BaseHook {
     ////////////////////////////////////////////////////////
     /////////////////// Helper functions ///////////////////
     ////////////////////////////////////////////////////////
-
-    function _setPendleTokensForPool(PoolId poolId, address _PT) internal {
-        if (address(pendleTokens[poolId].PT) != address(0)) {
-            // @todo Replace with custom error
-            revert("Pendle tokens already set");
-        }
-
-        IPPrincipalToken PT_ = IPPrincipalToken(_PT);
-        IStandardizedYield SY_ = IStandardizedYield(PT_.SY());
-        IPYieldToken YT_ = IPYieldToken(PT_.YT());
-
-        pendleTokens[poolId].PT = PT_;
-        pendleTokens[poolId].SY = SY_;
-        pendleTokens[poolId].YT = YT_;
-    }
 }
