@@ -14,12 +14,13 @@ contract BondZeroMaster {
     using SafeERC20 for IERC20;
 
     struct BondMarket {
-        address yieldBearingToken; // For ex: sUSDe
-        address assetToken; // For ex: USDe
-        address principalToken; // For ex: ZPT-sUSDe
-        address yieldToken; // For ex: ZYT-sUSDe
+        address yieldBearingToken; // For ex: wstETH
+        address assetToken; // For ex: stETH
+        address principalToken; // For ex: ZPT-wstETH
+        address yieldToken; // For ex: ZYT-wstETH
         uint256 expiry; // Timestamp when the market expires
         uint256 initialApr; // Initial APR when creating the market
+        uint256 creationTimestamp; // Timestamp when the market was created with the initial APR
     }
 
     mapping(bytes32 marketId => BondMarket) bondMarkets;
@@ -58,6 +59,7 @@ contract BondZeroMaster {
 
         market.expiry = _expiry;
         market.initialApr = _initialApr;
+        market.creationTimestamp = block.timestamp;
 
         bondMarkets[marketId] = market;
         emit MarketCreated(marketId, _yieldBearingToken, _assetToken, _expiry);
