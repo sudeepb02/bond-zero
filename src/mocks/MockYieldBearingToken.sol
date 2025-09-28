@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /**
  * @title MockYieldBearingToken
@@ -104,7 +105,21 @@ contract MockYieldBearingToken is ERC20, Ownable {
         lastUpdateTime = block.timestamp;
 
         if (exchangeRate > oldRate) {
-            uint256 yieldAmount = totalSupply() * (exchangeRate - oldRate) / 1e18;
+            // Calculate the additional assets needed to back the yield
+            uint256 totalSharesOutstanding = totalSupply();
+            if (totalSharesOutstanding > 0) {
+                uint256 newTotalAssets = totalSharesOutstanding * exchangeRate / 1e18;
+                uint256 yieldAssets = newTotalAssets - totalAssets;
+
+                if (yieldAssets > 0) {
+                    // Mint additional underlying asset tokens to back the yield
+                    // Cast to MockERC20 to access mint function
+                    MockERC20(address(asset)).mint(address(this), yieldAssets);
+                    totalAssets = newTotalAssets;
+                }
+            }
+
+            uint256 yieldAmount = totalSharesOutstanding * (exchangeRate - oldRate) / 1e18;
             emit YieldAccrued(exchangeRate, yieldAmount);
         }
     }
@@ -127,8 +142,21 @@ contract MockYieldBearingToken is ERC20, Ownable {
         exchangeRate = newRate;
         lastUpdateTime = block.timestamp;
 
+        // Calculate the additional assets needed to back the yield
+        uint256 totalSharesOutstanding = totalSupply();
+        if (totalSharesOutstanding > 0 && newRate > oldRate) {
+            uint256 newTotalAssets = totalSharesOutstanding * newRate / 1e18;
+            uint256 yieldAssets = newTotalAssets - totalAssets;
+
+            if (yieldAssets > 0) {
+                // Mint additional underlying asset tokens to back the yield
+                MockERC20(address(asset)).mint(address(this), yieldAssets);
+                totalAssets = newTotalAssets;
+            }
+        }
+
         // Calculate yield amount based on total supply
-        uint256 yieldAmount = totalSupply() * (newRate - oldRate) / 1e18;
+        uint256 yieldAmount = totalSharesOutstanding * (newRate - oldRate) / 1e18;
 
         emit YieldAccrued(newRate, yieldAmount);
     }
