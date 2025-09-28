@@ -16,10 +16,13 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 
 import {BondZeroMaster} from "./BondZeroMaster.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
-contract BondZeroHook is BaseHook, Ownable {
+contract BondZeroHook is BaseHook, Ownable, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using CurrencySettler for Currency;
 
     uint24 public constant MIN_FEE = 500; // 0.05%
     uint24 public constant MAX_FEE = 3000; // 0.30%
@@ -28,9 +31,18 @@ contract BondZeroHook is BaseHook, Ownable {
     BondZeroMaster public immutable bondZeroMaster;
 
     // Mapping from Uniswap pool ID to market ID
-    mapping(PoolId poolId => bytes32 marketId) public poolToMarketId;
+    mapping(PoolId => bytes32) internal poolToMarketId;
 
-    // Events
+    // Callback data structure for unlock operations
+    struct CallbackData {
+        uint256 amountEach; // Amount of each token to add as liquidity
+        Currency currency0;
+        Currency currency1;
+        address sender;
+    }
+
+    error AddLiquidityThroughHook(); // Error when someone tries adding liquidity directly to PoolManager
+
     event PoolMarketMappingSet(PoolId indexed poolId, bytes32 indexed marketId);
 
     constructor(IPoolManager _poolManager, BondZeroMaster _bondZeroMaster) BaseHook(_poolManager) Ownable(msg.sender) {
@@ -41,7 +53,7 @@ contract BondZeroHook is BaseHook, Ownable {
         return Hooks.Permissions({
             beforeInitialize: false,
             afterInitialize: true,
-            beforeAddLiquidity: false,
+            beforeAddLiquidity: true, // Disable adding liquidity through PoolManager
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: false,
@@ -49,7 +61,7 @@ contract BondZeroHook is BaseHook, Ownable {
             afterSwap: false,
             beforeDonate: false,
             afterDonate: false,
-            beforeSwapReturnDelta: true,
+            beforeSwapReturnDelta: true, // Allow beforeSwap to return custom delta
             afterSwapReturnDelta: false,
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
@@ -79,6 +91,58 @@ contract BondZeroHook is BaseHook, Ownable {
         bytes32 marketId = poolToMarketId[poolKey.toId()];
         require(marketId != bytes32(0), "invalid market");
         return bondZeroMaster.getBondMarket(marketId);
+    }
+
+    ////////////////////////////////////////////////////////
+    ///////////////////////  Liquidity /////////////////////
+    ////////////////////////////////////////////////////////
+
+    // Disable adding liquidity through the PoolManager
+    function beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
+        revert AddLiquidityThroughHook();
+    }
+
+    // Custom add liquidity function - following CSMM pattern
+    function addLiquidity(PoolKey calldata key, uint256 amountEach) external {
+        poolManager.unlock(abi.encode(CallbackData(amountEach, key.currency0, key.currency1, msg.sender)));
+    }
+
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
+        require(msg.sender == address(poolManager), "!pool manager");
+        CallbackData memory callbackData = abi.decode(data, (CallbackData));
+
+        // Settle `amountEach` of each currency from the sender
+        // i.e. Create a debit of `amountEach` of each currency with the Pool Manager
+        callbackData.currency0.settle(
+            poolManager,
+            callbackData.sender,
+            callbackData.amountEach,
+            false // `burn` = `false` i.e. we're transferring tokens, not burning ERC-6909 claim tokens
+        );
+        callbackData.currency1.settle(poolManager, callbackData.sender, callbackData.amountEach, false);
+
+        // Get back ERC-6909 claim tokens for `amountEach` of each currency
+        // to create a credit that balances out the debit
+        callbackData.currency0.take(
+            poolManager,
+            address(this),
+            callbackData.amountEach,
+            true // true = mint claim tokens for the hook
+        );
+        callbackData.currency1.take(poolManager, address(this), callbackData.amountEach, true);
+
+        return "";
+    }
+
+    // Helper function to check claim token balances
+    function getClaimTokenBalance(Currency currency) external view returns (uint256) {
+        uint256 currencyId = CurrencyLibrary.toId(currency);
+        return poolManager.balanceOf(address(this), currencyId);
     }
 
     ////////////////////////////////////////////////////////
@@ -120,45 +184,68 @@ contract BondZeroHook is BaseHook, Ownable {
         SwapParams calldata params,
         BondZeroMaster.BondMarket memory market
     ) internal returns (bytes4, BeforeSwapDelta, uint24) {
-        // Determine which currency is the principal token and which is the yield bearing token
-        Currency currency0 = key.currency0;
-        Currency currency1 = key.currency1;
+        // For expired markets, implement 1:1 swap rate between PT and YBT
+        // Following the CSMM pattern with claim token management
+        // https://learn.atrium.academy/course/9a4ba933-4bee-42fe-871c-6c28b5ca9ffd/return-delta-hooks
 
-        address token0 = Currency.unwrap(currency0);
-        address token1 = Currency.unwrap(currency1);
+        // Check for potential overflow before casting
+        require(params.amountSpecified != 0, "zero");
+        require(
+            params.amountSpecified >= type(int128).min && params.amountSpecified <= type(int128).max,
+            "int128 amount overflow"
+        );
 
-        if (token0 == market.principalToken) {
-            // token0 is PT, token1 is YBT
-            require(token1 == market.yieldBearingToken, "invalid market");
-        } else if (token1 == market.principalToken) {
-            // token1 is PT, token0 is YBT
-            require(token0 == market.yieldBearingToken, "invalid market");
+        uint256 amountInOutPositive =
+            params.amountSpecified > 0 ? uint256(params.amountSpecified) : uint256(-params.amountSpecified);
+
+        // BeforeSwapDelta format: (specifiedCurrency, unspecifiedCurrency)
+        // For 1:1 swaps, we set deltaSpecified = -amountSpecified, deltaUnspecified = +amountSpecified
+        BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
+            int128(-params.amountSpecified), // Consume the specified amount
+            int128(params.amountSpecified) // Provide the unspecified amount at 1:1 ratio
+        );
+
+        // Check that hook has sufficient claim tokens for the swap
+        if (params.zeroForOne) {
+            // Check if hook has enough Currency1 claim tokens to settle
+            uint256 currency1Claims = poolManager.balanceOf(address(this), key.currency1.toId());
+            require(currency1Claims >= amountInOutPositive, "Insufficient Currency1 claim tokens");
+
+            // User is selling Currency0 and buying Currency1
+            // Take claim tokens for Currency0 (input) and settle Currency1 (output)
+            key.currency0.take(
+                poolManager,
+                address(this),
+                amountInOutPositive,
+                true // mint claim tokens to hook
+            );
+            key.currency1.settle(
+                poolManager,
+                address(this),
+                amountInOutPositive,
+                true // burn claim tokens from hook
+            );
         } else {
-            revert("invalid market");
+            // Check if hook has enough Currency0 claim tokens to settle
+            uint256 currency0Claims = poolManager.balanceOf(address(this), key.currency0.toId());
+            require(currency0Claims >= amountInOutPositive, "Insufficient Currency0 claim tokens");
+
+            // User is selling Currency1 and buying Currency0
+            // Take claim tokens for Currency1 (input) and settle Currency0 (output)
+            key.currency1.take(poolManager, address(this), amountInOutPositive, true);
+            key.currency0.settle(poolManager, address(this), amountInOutPositive, true);
         }
 
-        // intercept the swap and handle it at 1:1 rate exchange rate (for expired markets only)
-        // markets having time till maturity trade freely
-        if (params.amountSpecified < 0) {
-            // Exact input swap
-            int128 amountSpecified = int128(params.amountSpecified);
+        return (BaseHook.beforeSwap.selector, beforeSwapDelta, 0);
+    }
 
-            // For 1:1 rate, set the output amount equals the input amount\
-            int128 deltaSpecified = amountSpecified; // receive the input amount
-            int128 deltaUnspecified = -amountSpecified; // transfer equal output amount
-
-            BeforeSwapDelta delta = toBeforeSwapDelta(deltaSpecified, deltaUnspecified);
-            return (BaseHook.beforeSwap.selector, delta, 0);
-        } else {
-            // Exact output swap
-            int128 amountSpecified = int128(params.amountSpecified);
-
-            // For 1:1 rate, set the input amount equals the output amount
-            int128 deltaSpecified = -amountSpecified; // transfer the output amount
-            int128 deltaUnspecified = amountSpecified; // receive equal input amount
-
-            BeforeSwapDelta delta = toBeforeSwapDelta(deltaSpecified, deltaUnspecified);
-            return (BaseHook.beforeSwap.selector, delta, 0);
-        }
+    /// @notice Helper function to determine input/output currencies and amount for the swap
+    function _getInputOutputAndAmount(PoolKey calldata key, SwapParams calldata params)
+        internal
+        pure
+        returns (Currency input, Currency output, uint256 amount)
+    {
+        (input, output) = params.zeroForOne ? (key.currency0, key.currency1) : (key.currency1, key.currency0);
+        amount = params.amountSpecified < 0 ? uint256(-params.amountSpecified) : uint256(params.amountSpecified);
     }
 }
