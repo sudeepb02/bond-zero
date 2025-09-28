@@ -376,7 +376,7 @@ contract BondZeroHookTest is Test, Deployers {
         // Run the setup and get to expired state
         address testUser = address(0x999);
         vm.startPrank(testUser);
-        
+
         console2.log("=== Testing YBT -> PT Swap Prevention After Expiry ===");
 
         // === STEP 1: Setup user with tokens ===
@@ -394,10 +394,10 @@ contract BondZeroHookTest is Test, Deployers {
 
         // === STEP 4: Try to swap YBT for PT (should fail) ===
         uint256 ybtSwapAmount = 100e18;
-        
+
         // Determine swap direction for YBT → PT (opposite of PT → YBT)
         bool zeroForOne = !isPTToken0; // If PT is token0, then YBT is token1, so we need !zeroForOne to swap YBT→PT
-        
+
         console2.log("Attempting YBT -> PT swap (should revert)");
         console2.log("Swap direction zeroForOne:", zeroForOne);
         console2.log("isPTToken0:", isPTToken0);

@@ -7,33 +7,49 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 /**
  * @title MockYieldBearingToken
- * @dev A mock implementation of a yield-bearing token for testing purposes
- * This contract simulates yield generation by automatically updating exchange rate based on APR and time
+ * @author BondZero Protocol
+ * @notice Mock implementation of a yield-bearing token for testing bond market functionality
+ * @dev Simulates yield generation by automatically updating exchange rate based on APR and time
+ *      Used to test BondZero protocol without needing real yield-bearing assets like wstETH
+ *      Implements ERC4626-like vault functionality with configurable APR
  */
 contract MockYieldBearingToken is ERC20, Ownable {
-    // The underlying asset token (e.g., USDC, DAI)
+    /// @notice The underlying asset token (e.g., USDC, DAI, ETH)
     ERC20 public immutable asset;
 
-    // Exchange rate from asset to yield bearing token (scaled by 1e18)
-    // Initially 1:1, but increases over time based on APR
+    /// @notice Exchange rate from asset to yield bearing token (scaled by 1e18)
+    /// @dev Initially 1:1, but increases over time based on APR to simulate yield
     uint256 public exchangeRate = 1e18;
 
-    // Annual Percentage Rate in basis points (e.g., 1000 = 10%)
+    /// @notice Annual Percentage Rate in basis points (e.g., 1000 = 10%)
     uint256 public immutable aprBasisPoints;
 
-    // Timestamp when the contract was deployed (start of yield accrual)
+    /// @notice Timestamp when the contract was deployed (start of yield accrual)
     uint256 public immutable deploymentTime;
 
-    // Last time the exchange rate was updated
+    /// @notice Last time the exchange rate was updated
+    /// @dev Used to calculate time-based yield accrual
     uint256 public lastUpdateTime;
 
-    // Total amount of underlying assets deposited
+    /// @notice Total amount of underlying assets deposited in the contract
     uint256 public totalAssets;
 
+    /// @notice Emitted when yield is accrued and exchange rate is updated
     event YieldAccrued(uint256 newExchangeRate, uint256 yieldAmount);
+
+    /// @notice Emitted when user deposits assets and receives shares
     event Deposited(address indexed user, uint256 assets, uint256 shares);
+
+    /// @notice Emitted when user withdraws assets by burning shares
     event Withdrawn(address indexed user, uint256 assets, uint256 shares);
 
+    /**
+     * @notice Constructs a new MockYieldBearingToken with specified parameters
+     * @param _name Token name (e.g., "Mock Wrapped Staked ETH")
+     * @param _symbol Token symbol (e.g., "mwstETH")
+     * @param _asset Address of the underlying asset token
+     * @param _aprBasisPoints Annual percentage rate in basis points
+     */
     constructor(string memory _name, string memory _symbol, address _asset, uint256 _aprBasisPoints)
         ERC20(_name, _symbol)
         Ownable(msg.sender)
@@ -45,7 +61,8 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Deposit underlying assets and mint yield bearing tokens
+     * @notice Deposit underlying assets and mint yield bearing tokens
+     * @dev Updates exchange rate before calculating shares to ensure accurate conversion
      * @param assets Amount of underlying assets to deposit
      * @return shares Amount of yield bearing tokens minted
      */
@@ -65,7 +82,8 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Withdraw underlying assets by burning yield bearing tokens
+     * @notice Withdraw underlying assets by burning yield bearing tokens
+     * @dev Updates exchange rate before calculating assets to ensure accurate conversion
      * @param shares Amount of yield bearing tokens to burn
      * @return assets Amount of underlying assets withdrawn
      */
@@ -86,7 +104,9 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Internal function to update exchange rate based on time elapsed and APR
+     * @notice Internal function to update exchange rate based on time elapsed and APR
+     * @dev Uses compound interest calculation: rate = rate * (1 + APR * timeElapsed / secondsInYear)
+     *      Mints additional underlying assets to back the accrued yield
      */
     function _updateExchangeRate() internal {
         if (block.timestamp <= lastUpdateTime) {
@@ -125,14 +145,16 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Manually update the exchange rate (for testing purposes)
+     * @notice Manually update the exchange rate (for testing purposes)
+     * @dev Triggers time-based yield accrual calculation and state update
      */
     function updateExchangeRate() external {
         _updateExchangeRate();
     }
 
     /**
-     * @dev Simulate yield accrual by updating the exchange rate
+     * @notice Simulate yield accrual by directly setting the exchange rate
+     * @dev Owner-only function for testing scenarios with specific yield amounts
      * @param newRate New exchange rate (scaled by 1e18)
      */
     function accrueYield(uint256 newRate) external onlyOwner {
@@ -161,7 +183,7 @@ contract MockYieldBearingToken is ERC20, Ownable {
         emit YieldAccrued(newRate, yieldAmount);
     }
     /**
-     * @dev Convert asset amount to shares based on current exchange rate
+     * @notice Convert asset amount to shares based on current exchange rate
      * @param assets Amount of underlying assets
      * @return shares Equivalent amount of yield bearing tokens
      */
@@ -175,7 +197,7 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Convert shares to asset amount based on current exchange rate
+     * @notice Convert shares to asset amount based on current exchange rate
      * @param shares Amount of yield bearing tokens
      * @return assets Equivalent amount of underlying assets
      */
@@ -185,7 +207,8 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Get the current exchange rate without updating state (view function)
+     * @notice Get the current exchange rate without updating state (view function)
+     * @dev Calculates what the exchange rate would be if updated now
      * @return Current exchange rate based on time elapsed
      */
     function _getCurrentExchangeRate() internal view returns (uint256) {
@@ -201,7 +224,7 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Get the current value of total assets including accrued yield
+     * @notice Get the current value of total assets including accrued yield
      * @return Total value of assets in the contract
      */
     function totalAssetsWithYield() external view returns (uint256) {
@@ -209,7 +232,8 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Mint tokens directly (for testing setup)
+     * @notice Mint tokens directly (for testing setup)
+     * @dev Owner-only function to mint tokens without depositing assets
      * @param to Address to mint tokens to
      * @param amount Amount of tokens to mint
      */
@@ -218,24 +242,24 @@ contract MockYieldBearingToken is ERC20, Ownable {
     }
 
     /**
-     * @dev Get the current exchange rate (includes time-based accrual)
-     * @return Current exchange rate
+     * @notice Get the current exchange rate (includes time-based accrual)
+     * @return Current exchange rate scaled by 1e18
      */
     function getCurrentExchangeRate() external view returns (uint256) {
         return _getCurrentExchangeRate();
     }
 
     /**
-     * @dev Get the configured APR
-     * @return APR in basis points
+     * @notice Get the configured APR
+     * @return APR in basis points (e.g., 1000 = 10%)
      */
     function getAPR() external view returns (uint256) {
         return aprBasisPoints;
     }
 
     /**
-     * @dev Get time since last update
-     * @return Time elapsed in seconds
+     * @notice Get time since last exchange rate update
+     * @return Time elapsed in seconds since last update
      */
     function getTimeSinceLastUpdate() external view returns (uint256) {
         return block.timestamp - lastUpdateTime;
