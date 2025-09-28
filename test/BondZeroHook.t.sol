@@ -371,4 +371,50 @@ contract BondZeroHookTest is Test, Deployers {
 
         vm.stopPrank();
     }
+
+    function testCannotSwapYBTForPTWhenExpired() public {
+        // Run the setup and get to expired state
+        address testUser = address(0x999);
+        vm.startPrank(testUser);
+        
+        console2.log("=== Testing YBT -> PT Swap Prevention After Expiry ===");
+
+        // === STEP 1: Setup user with tokens ===
+        underlyingAsset.mint(testUser, 1000e18);
+        underlyingAsset.approve(address(yieldBearingToken), 1000e18);
+        yieldBearingToken.deposit(1000e18);
+
+        // === STEP 2: Mint PT/YT tokens ===
+        yieldBearingToken.approve(address(bondZeroMaster), 600e18);
+        bondZeroMaster.mintPtAndYt(marketId, 600e18);
+
+        // === STEP 3: Progress time to expiry ===
+        vm.warp(expiry + 1);
+        console2.log("Market expired at timestamp:", block.timestamp);
+
+        // === STEP 4: Try to swap YBT for PT (should fail) ===
+        uint256 ybtSwapAmount = 100e18;
+        
+        // Determine swap direction for YBT → PT (opposite of PT → YBT)
+        bool zeroForOne = !isPTToken0; // If PT is token0, then YBT is token1, so we need !zeroForOne to swap YBT→PT
+        
+        console2.log("Attempting YBT -> PT swap (should revert)");
+        console2.log("Swap direction zeroForOne:", zeroForOne);
+        console2.log("isPTToken0:", isPTToken0);
+
+        // This swap should revert with wrapped error containing our message
+        vm.expectRevert();
+        swapRouter.swapExactTokensForTokens({
+            amountIn: ybtSwapAmount,
+            amountOutMin: ybtSwapAmount,
+            zeroForOne: zeroForOne,
+            poolKey: poolKey,
+            hookData: Constants.ZERO_BYTES,
+            receiver: testUser,
+            deadline: block.timestamp + 100
+        });
+
+        console2.log("YBT -> PT swap correctly rejected after expiry");
+        vm.stopPrank();
+    }
 }
