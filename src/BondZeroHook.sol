@@ -17,6 +17,7 @@ import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol
 
 import {BondZeroMaster} from "./BondZeroMaster.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
 contract BondZeroHook is BaseHook, Ownable, IUnlockCallback {
@@ -184,9 +185,7 @@ contract BondZeroHook is BaseHook, Ownable, IUnlockCallback {
         SwapParams calldata params,
         BondZeroMaster.BondMarket memory market
     ) internal returns (bytes4, BeforeSwapDelta, uint24) {
-        // For expired markets, implement 1:1 swap rate between PT and YBT
-        // Following the CSMM pattern with claim token management
-        // https://learn.atrium.academy/course/9a4ba933-4bee-42fe-871c-6c28b5ca9ffd/return-delta-hooks
+        // For expired markets, redeem PT tokens 1:1 for YBT through BondZeroMaster
 
         // Check for potential overflow before casting
         require(params.amountSpecified != 0, "zero");
@@ -198,43 +197,65 @@ contract BondZeroHook is BaseHook, Ownable, IUnlockCallback {
         uint256 amountInOutPositive =
             params.amountSpecified > 0 ? uint256(params.amountSpecified) : uint256(-params.amountSpecified);
 
+        // Determine which currency is PT and which is YBT
+        Currency ptCurrency;
+        Currency ybtCurrency;
+        bool isPTCurrency0;
+
+        if (Currency.unwrap(key.currency0) == market.principalToken) {
+            ptCurrency = key.currency0;
+            ybtCurrency = key.currency1;
+            isPTCurrency0 = true;
+            require(Currency.unwrap(key.currency1) == market.yieldBearingToken, "invalid YBT");
+        } else if (Currency.unwrap(key.currency1) == market.principalToken) {
+            ptCurrency = key.currency1;
+            ybtCurrency = key.currency0;
+            isPTCurrency0 = false;
+            require(Currency.unwrap(key.currency0) == market.yieldBearingToken, "invalid YBT");
+        } else {
+            revert("invalid market mapping");
+        }
+
+        // Check if user is trying to swap PT for YBT (the only allowed direction for expired markets)
+        bool isSwappingPTForYBT = (isPTCurrency0 && params.zeroForOne) || (!isPTCurrency0 && !params.zeroForOne);
+        require(isSwappingPTForYBT, "can only swap PT for YBT when expired");
+
         // BeforeSwapDelta format: (specifiedCurrency, unspecifiedCurrency)
         // For 1:1 swaps, we set deltaSpecified = -amountSpecified, deltaUnspecified = +amountSpecified
         BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
-            int128(-params.amountSpecified), // Consume the specified amount
-            int128(params.amountSpecified) // Provide the unspecified amount at 1:1 ratio
+            int128(-params.amountSpecified), // Consume the specified amount (PT)
+            int128(params.amountSpecified) // Provide the unspecified amount (YBT) at 1:1 ratio
         );
 
-        // Check that hook has sufficient claim tokens for the swap
-        if (params.zeroForOne) {
-            // Check if hook has enough Currency1 claim tokens to settle
-            uint256 currency1Claims = poolManager.balanceOf(address(this), key.currency1.toId());
-            require(currency1Claims >= amountInOutPositive, "Insufficient Currency1 claim tokens");
+        // Take PT tokens from user via pool manager
+        ptCurrency.take(poolManager, address(this), amountInOutPositive, false);
 
-            // User is selling Currency0 and buying Currency1
-            // Take claim tokens for Currency0 (input) and settle Currency1 (output)
-            key.currency0.take(
-                poolManager,
-                address(this),
-                amountInOutPositive,
-                true // mint claim tokens to hook
-            );
-            key.currency1.settle(
-                poolManager,
-                address(this),
-                amountInOutPositive,
-                true // burn claim tokens from hook
-            );
-        } else {
-            // Check if hook has enough Currency0 claim tokens to settle
-            uint256 currency0Claims = poolManager.balanceOf(address(this), key.currency0.toId());
-            require(currency0Claims >= amountInOutPositive, "Insufficient Currency0 claim tokens");
-
-            // User is selling Currency1 and buying Currency0
-            // Take claim tokens for Currency1 (input) and settle Currency0 (output)
-            key.currency1.take(poolManager, address(this), amountInOutPositive, true);
-            key.currency0.settle(poolManager, address(this), amountInOutPositive, true);
+        // Get the actual PT token contract and approve BondZeroMaster if needed
+        IERC20 ptToken = IERC20(Currency.unwrap(ptCurrency));
+        if (ptToken.allowance(address(this), address(bondZeroMaster)) < amountInOutPositive) {
+            ptToken.approve(address(bondZeroMaster), type(uint256).max);
         }
+
+        // Get current YBT balance before redemption
+        IERC20 ybtToken = IERC20(Currency.unwrap(ybtCurrency));
+        uint256 ybtBalanceBefore = ybtToken.balanceOf(address(this));
+
+        // Redeem PT tokens for YBT through BondZeroMaster
+        bytes32 marketId = poolToMarketId[key.toId()];
+        bondZeroMaster.redeemPtAndYt(marketId, amountInOutPositive);
+
+        // Verify we received the expected amount of YBT
+        uint256 ybtBalanceAfter = ybtToken.balanceOf(address(this));
+        uint256 ybtReceived = ybtBalanceAfter - ybtBalanceBefore;
+        require(ybtReceived >= amountInOutPositive, "redemption failed");
+
+        // Approve pool manager to take the YBT tokens if needed
+        if (ybtToken.allowance(address(this), address(poolManager)) < amountInOutPositive) {
+            ybtToken.approve(address(poolManager), type(uint256).max);
+        }
+
+        // Settle YBT tokens to user via pool manager
+        ybtCurrency.settle(poolManager, address(this), amountInOutPositive, false);
 
         return (BaseHook.beforeSwap.selector, beforeSwapDelta, 0);
     }
